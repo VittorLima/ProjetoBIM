@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visualizador IFC</title>
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+    #info {
+      position: absolute; top: 10px; left: 10px; z-index: 10;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 15px; border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      font-family: Arial, sans-serif;
+    }
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <h3>Visualizador IFC</h3>
+    <input type="file" id="ifc-file-input" accept=".ifc" />
+    <p id="status">Aguardando arquivo...</p>
+  </div>
+
+  <div id="three-canvas"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
