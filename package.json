@@ -1,21 +1,9 @@
 {
-  "name": "bim-ar-viewer",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-basic-ssl": "^2.1.0",
-    "vite": "^7.1.2",
-    "vite-plugin-mkcert": "^1.17.8"
-  },
-  "dependencies": {
-    "three": "^0.135.0",
-    "web-ifc": "^0.0.71",
-    "web-ifc-viewer": "^1.0.218"
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist -b gh-pages"
   }
 }

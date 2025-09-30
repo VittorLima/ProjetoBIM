@@ -1,35 +1,56 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Visualizador IFC</title>
-  <style>
-    body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
-    #info {
-      position: absolute; top: 10px; left: 10px; z-index: 10;
-      background: rgba(255, 255, 255, 0.9);
-      padding: 15px; border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      font-family: Arial, sans-serif;
-    }
-    canvas {
-      width: 100vw;
-      height: 100vh;
-      display: block;
-    }
-  </style>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="info">
-    <h3>Visualizador IFC</h3>
-    <input type="file" id="ifc-file-input" accept=".ifc" />
-    <p id="status">Aguardando arquivo...</p>
-    <button id="ar-button">Entrar em AR</button>
-    <button id="ar-exit-button" style="display:none;">Sair do AR</button>
-  </div>
+  <main class="app-container">
+    
+    <!-- Upload -->
+    <section class="card">
+      <h2>Visualizador IFC</h2>
+      <input type="file" id="ifc-file-input" accept=".ifc" />
+      <button id="reset-all-button" class="btn btn-secondary">Resetar Tudo</button>
+      <p id="status">Aguardando arquivo...</p>
+    </section>
 
-  <div id="three-canvas"></div>
+    <!-- Visualização -->
+    <section class="card">
+      <h3>Visualização</h3>
+      <div class="form-group">
+        <label for="mode-selector">Agrupar por:</label>
+        <select id="mode-selector">
+          <option value="level">Nível</option>
+          <option value="layer">Camada</option>
+          <option value="type">Tipo</option>
+          <option value="system">Sistema</option>
+          <option value="zone">Zona</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <select id="group-selector"></select>
+      </div>
+      <button id="show-all-button" class="btn btn-primary">Mostrar Tudo</button>
+    </section>
+
+    <!-- Propriedades -->
+    <section class="card">
+      <h3>Propriedades</h3>
+      <div id="props-content">Clique em um elemento</div>
+    </section>
+
+    <!-- Botões AR -->
+    <section class="card center">
+      <button id="ar-button" class="btn btn-accent">Entrar em AR</button>
+      <button id="ar-exit-button" class="btn btn-danger hidden">Sair do AR</button>
+    </section>
+
+    <!-- Viewer -->
+    <section id="three-canvas" class="viewer"></section>
+  </main>
 
   <script type="module" src="/src/main.js"></script>
 </body>
