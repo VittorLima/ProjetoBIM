@@ -14,17 +14,25 @@ let dragYaw = 0, dragging = false, lastX = 0;
 let userScale = 1;
 let userTouchedScale = false;
 
-function getRenderer(v){ return v.context.getRenderer?.() || v.context.renderer?.renderer || v.context.renderer; }
-function getScene(v){ return v.context.getScene?.() || v.context.scene; }
-function getCamera(v){ return v.context.getCamera?.() || v.context.camera; }
+function getRenderer(v){ return v?.context?.getRenderer?.() || v?.context?.renderer?.renderer || v?.context?.renderer; }
+function getScene(v){ return v?.context?.getScene?.() || v?.context?.scene; }
+function getCamera(v){ return v?.context?.getCamera?.() || v?.context?.camera; }
+
+let viewer;
+let model = null;
+let ifcManager = null;
+const STOREY_SUBSET_ID = 'storey_subset';
+let storeyIndex = {}; // { [storeyID]: { name, ids:number[] } }
 
 async function init() {
   const container = document.getElementById('three-canvas');
+  if (!container) return;
 
-  const viewer = new IfcViewerAPI({
+  viewer = new IfcViewerAPI({
     container,
     backgroundColor: new THREE.Color(0xf0f0f0)
   });
+  window.viewer = viewer;
 
   const wasmBase = import.meta.env.DEV ? '/' : import.meta.env.BASE_URL;
   await viewer.IFC.setWasmPath(wasmBase);
@@ -34,56 +42,177 @@ async function init() {
   viewer.context.renderer.postProduction.active = false;
 
   const scene    = getScene(viewer);
-  const camera   = getCamera(viewer);
   const renderer = getRenderer(viewer);
 
-  // raiz AR e retículo
-  scene.add(arRoot); arRoot.visible = false;
+  scene.add(arRoot);
+  arRoot.visible = false;
+
   reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0x00ff99, transparent:true, opacity:0.95, depthTest:false })
+    //material: new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 }),
+
   );
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
   scene.add(reticle);
 
-  const ifcFileInput  = document.getElementById('ifc-file-input');
-  const statusElement = document.getElementById('status');
-  const arBtn         = document.getElementById('ar-button');
-  const arExitBtn     = document.getElementById('ar-exit-button');
-  const arOverlay     = document.getElementById('ar-overlay');
+  const ifcFileInput   = document.getElementById('ifc-file-input');
+  const statusElement  = document.getElementById('status');
+  const arBtn          = document.getElementById('ar-button');
+  const arExitBtn      = document.getElementById('ar-exit-button');
+  const arOverlay      = document.getElementById('ar-overlay');
+  const propsPanel     = document.getElementById('props-content');
+  const storeySelector = document.getElementById('storey-selector');
 
-  ifcFileInput.addEventListener('change', async (ev)=>{
-    const file=ev.target.files[0]; if(!file) return;
-    statusElement.textContent='Carregando modelo 3D...';
-    try{
-      await viewer.IFC.loadIfc(file,true);
-      statusElement.textContent='Modelo carregado!';
-    }catch(err){ statusElement.textContent=`Erro ao carregar: ${err.message}`; }
+  // --- Upload IFC ---
+  ifcFileInput?.addEventListener('change', async (ev)=>{
+    const file = ev.target.files?.[0];
+    if(!file) return;
+    statusElement.textContent = 'Carregando modelo 3D...';
+    try {
+      model = await viewer.IFC.loadIfc(file, true);
+      ifcManager = viewer.IFC.loader.ifcManager;
+      statusElement.textContent = 'Modelo carregado!';
+      storeyIndex = await buildStoreyIndex(model.modelID);
+
+      // popular seletor
+      if (storeySelector) {
+        storeySelector.innerHTML = `<option value="all">Todos os pavimentos</option>`;
+        Object.entries(storeyIndex).forEach(([sid, info])=>{
+          const opt = document.createElement('option');
+          opt.value = sid;
+          opt.textContent = info.name || `Pavimento ${sid}`;
+          storeySelector.appendChild(opt);
+        });
+      }
+    } catch (err) {
+      statusElement.textContent = `Erro ao carregar: ${err?.message || err}`;
+    }
   });
 
+  // --- Clique para propriedades ---
+  renderer?.domElement?.addEventListener('click', async (ev) => {
+    if (!model) return;
+    if (ev.target?.closest?.('#ar-overlay')) return;
+
+    const result = await viewer.IFC.selector.pickIfcItem();
+    if (!result) {
+      resetModelView();
+      viewer.IFC.selector.unpickIfcItems();
+      propsPanel.innerHTML = 'Clique em um elemento';
+      return;
+    }
+
+    const props    = await viewer.IFC.getProperties(model.modelID, result.id, true, true);
+    const storey   = await getStoreyName(viewer, model.modelID, result.id);
+    const material = await getMaterialName(viewer, model.modelID, result.id);
+
+    const altura   = formatDim(props?.OverallHeight?.value);
+    const largura  = formatDim(props?.OverallWidth?.value);
+    const humanName = humanizeType(props?.type);
+
+    propsPanel.innerHTML = `
+      <h5>${humanName}: ${props?.Name?.value || "Sem nome"}</h5>
+      <p><b>Pavimento:</b> ${storey}</p>
+      <p><b>Material:</b> ${material}</p>
+      ${altura  ? `<p><b>Altura:</b> ${altura}</p>`   : ""}
+      ${largura ? `<p><b>Largura:</b> ${largura}</p>` : ""}
+    `;
+  });
+
+  // --- Seletor de pavimentos ---
+  // --- Seletor de pavimentos (corrigido e com reset automático) ---
+storeySelector?.addEventListener('change', async (ev) => {
+  if (!model || !ifcManager) return;
+
+  const scene = getScene(viewer);
+  const subsetManager = ifcManager.subsets;
+  const modelID = model.modelID;
+
+  // Remover subset anterior e restaurar modelo completo
+  try {
+    subsetManager.removeSubset(modelID, STOREY_SUBSET_ID, scene);
+  } catch (e) {
+    console.warn("Nenhum subset anterior para remover:", e.message);
+  }
+  (viewer.context.items.ifcModels || []).forEach(m => { if (m.mesh) m.mesh.visible = true; });
+
+  const value = ev.target.value;
+  if (value === 'all') {
+    resetModelView();
+    return;
+  }
+
+  // Buscar pavimento e seus elementos
+  const storeys = await getAllStoreys(viewer, modelID);
+  const storey = storeys.find(s => String(s.expressID) === String(value));
+  if (!storey) return;
+
+  const elementIDs = [];
+  collectProductIDs(storey, elementIDs);
+  if (!elementIDs.length) {
+    console.warn('Nenhum elemento encontrado para o pavimento', value);
+    return;
+  }
+
+  try {
+    // Criar subset com o material original
+    const subset = subsetManager.createSubset({
+      modelID,
+      ids: elementIDs,
+      material: ifcManager.material,  // usa o material original IFC
+      scene,
+      removePrevious: true,
+      customID: STOREY_SUBSET_ID,
+      applyBVH: true // melhora performance e aparência
+    });
+
+    // Esconde o modelo original e mostra apenas o subset
+    if (subset) {
+      (viewer.context.items.ifcModels || []).forEach(m => { if (m.mesh) m.mesh.visible = false; });
+      if (!subset.parent) scene.add(subset);
+      subset.visible = true;
+    }
+
+  } catch (err) {
+    console.error('Erro ao criar subset:', err);
+  }
+});
+
+  // --- Botões AR ---
   arBtn?.addEventListener('click', async () => {
     try {
       let hasAR = false;
       if (navigator.xr?.isSessionSupported) {
         try { hasAR = await navigator.xr.isSessionSupported('immersive-ar'); } catch {}
       }
-      if (hasAR) {
-        await startAR(viewer, arOverlay);   // Android (WebXR)
-      } else {
-        await startFallbackAR(viewer);      // iOS e desktop (simples)
-      }
+      if (hasAR) await startAR(viewer, arOverlay);
+      else       await startFallbackAR(viewer);
       document.body.classList.add('is-ar');
       arOverlay?.classList.remove('hidden');
       arBtn.style.display = 'none';
+      arExitBtn.style.display = 'inline-block';
     } catch (e) {
       statusElement.textContent = 'Erro ao iniciar AR: ' + (e?.message || e);
     }
   });
 
   arExitBtn?.addEventListener('click', ()=> endAR(viewer));
+}
 
-  // ====== interação simples no fallback (rotacionar)
+/* ======== NOVA função corrigida ======== */
+function collectProductIDs(node, out) {
+  if (!node) return;
+  const type = (node.type || '').toUpperCase();
+  const isContainer = ['IFCPROJECT','IFCSITE','IFCBUILDING','IFCBUILDINGSTOREY'].includes(type);
+  if (!isContainer && Number.isInteger(node.expressID)) {
+    out.push(node.expressID);
+  }
+  (node.children || []).forEach(child => collectProductIDs(child, out));
+}
+/*
+  // rotação simples no fallback (se quiser usar)
   const canvas = renderer.domElement;
   canvas.addEventListener('mousedown', ev=>{ dragging=true; lastX=ev.clientX; });
   canvas.addEventListener('mousemove', ev=>{
@@ -101,8 +230,156 @@ async function init() {
   }, {passive:true});
   canvas.addEventListener('touchend', ()=> dragging=false);
 }
+*/
+/* ===== Índice de pavimentos (rápido e robusto) ===== */
+async function buildStoreyIndex(modelID) {
+  const tree = await viewer.IFC.getSpatialStructure(modelID);
+  const index = {};
 
-/* ========= AR real (Android / WebXR) ========= */
+  // Percorre o modelo hierarquicamente
+  async function traverse(node, currentStorey) {
+    if (!node) return;
+
+    const type = (node.type || '').toUpperCase();
+
+    // Quando encontra um pavimento
+    if (type === 'IFCBUILDINGSTOREY') {
+      currentStorey = node;
+      const ids = [];
+
+      collectDescendantProducts(node, ids);
+
+      // 🔹 Busca as propriedades oficiais do pavimento, igual ao painel
+      const storeyProps = await viewer.IFC.getProperties(modelID, node.expressID, true, true);
+      const name =
+        storeyProps?.LongName?.value ||
+        storeyProps?.Name?.value ||
+        node.LongName?.value ||
+        node.Name?.value ||
+        `Pavimento ${node.expressID}`;
+
+      index[node.expressID] = { name, ids: Array.from(new Set(ids)) };
+    }
+
+    // Adiciona produtos diretos
+    if (currentStorey && isProductNode(node) && Number.isInteger(node.expressID)) {
+      if (!index[currentStorey.expressID])
+        index[currentStorey.expressID] = { name: `Pavimento ${currentStorey.expressID}`, ids: [] };
+      index[currentStorey.expressID].ids.push(node.expressID);
+    }
+
+    // Recursão
+    if (node.children?.length) {
+      for (const ch of node.children) {
+        await traverse(ch, currentStorey);
+      }
+    }
+  }
+
+  await traverse(tree, null);
+  return index;
+}
+
+function isProductNode(node){
+  const t = (node.type||'').toUpperCase();
+  if (!t.startsWith('IFC')) return false;
+  // containers que NÃO queremos somar
+  const containers = new Set([
+    'IFCPROJECT','IFCSITE','IFCBUILDING','IFCBUILDINGSTOREY',
+    'IFCSPACE','IFCZONE'
+  ]);
+  return !containers.has(t);
+}
+
+function collectDescendantProducts(node, out){
+  if (!node) return;
+  if (isProductNode(node) && Number.isInteger(node.expressID)) out.push(node.expressID);
+  (node.children||[]).forEach(ch => collectDescendantProducts(ch, out));
+}
+
+/* ========= Utilidades de propriedades ========= */
+function formatDim(value) {
+  if (!value && value !== 0) return null;
+  const num = parseFloat(value);
+  if (Number.isNaN(num)) return value;
+  return num > 100 ? (num/1000).toFixed(2) + ' m' : num + ' m';
+}
+
+async function getStoreyName(viewer, modelID, elementID) {
+  const tree = await viewer.IFC.getSpatialStructure(modelID);
+  let storeyID = null;
+
+  function search(node) {
+    if (!node) return false;
+    if (node.expressID === elementID) return true;
+    for (const c of (node.children||[])) {
+      if (search(c)) {
+        if ((node.type||'') === "IFCBUILDINGSTOREY") storeyID = node.expressID;
+        return true;
+      }
+    }
+    return false;
+  }
+  search(tree);
+
+  if (!storeyID) return "N/A";
+  const storeyProps = await viewer.IFC.getProperties(modelID, storeyID, true, true);
+  return storeyProps?.LongName?.value || storeyProps?.Name?.value || `Pavimento ${storeyID}`;
+}
+
+async function getMaterialName(viewer, modelID, elementID) {
+  const props = await viewer.IFC.getProperties(modelID, elementID, true, true);
+
+  if (props?.HasAssociations) {
+    for (const rel of props.HasAssociations) {
+      const related = rel?.value?.RelatingMaterial?.value;
+      if (related?.Name?.value) return related.Name.value;
+    }
+  }
+  if (props?.IsDefinedBy) {
+    for (const def of props.IsDefinedBy) {
+      const rel = def?.value?.RelatingPropertyDefinition?.value;
+      if (rel?.HasProperties) {
+        for (const p of rel.HasProperties) {
+          const prop = p.value;
+          if (prop.Name?.value?.toLowerCase().includes("material")) {
+            return prop.NominalValue?.value || prop.Name?.value;
+          }
+        }
+      }
+    }
+  }
+  return "N/A";
+}
+
+function humanizeType(type) {
+  if (!type) return 'Elemento';
+  if (typeof type === 'object' && type.value) type = type.value;
+  if (typeof type !== 'string') return 'Elemento';
+  const map = {
+    'IFCWALLSTANDARDCASE': 'Parede',
+    'IFCBEAM'            : 'Viga',
+    'IFCCOLUMN'          : 'Pilar',
+    'IFCSLAB'            : 'Laje',
+    'IFCWINDOW'          : 'Janela',
+    'IFCDOOR'            : 'Porta'
+  };
+  return map[type.toUpperCase()] || type;
+}
+
+/* ========= Reset de visualização ========= */
+function resetModelView(){
+  if (!model || !ifcManager) return;
+  const scene = getScene(viewer);
+  const subsetManager = ifcManager.subsets;
+  try { subsetManager.removeSubset(model.modelID, STOREY_SUBSET_ID, scene); } catch {}
+  const ifcModels =
+    viewer.context?.items?.ifcModels ||
+    viewer.context?.ifcModels || [];
+  ifcModels.forEach(m => { if (m.mesh) m.mesh.visible = true; });
+}
+
+/* ========= AR (igual ao seu) ========= */
 async function startAR(viewer, domOverlayRoot){
   const renderer = getRenderer(viewer);
   const scene    = getScene(viewer);
@@ -155,7 +432,7 @@ async function startAR(viewer, domOverlayRoot){
   if (!xrHitTestSource) placeInFrontOfCamera(viewer, 1.2);
 }
 
-/* ========= Fallback simples (iOS e Desktop) ========= */
+/* ========= Fallback simples ========= */
 async function startFallbackAR(viewer){
   const renderer = getRenderer(viewer);
   const scene    = getScene(viewer);
@@ -170,18 +447,14 @@ async function startFallbackAR(viewer){
   viewer.grid?.setGrid(false);
   viewer.axes?.setAxes(false);
 
-  // 1) cria/garante o clone ANTES de esconder o original
   const clone = ensureARMesh(viewer);
   forceVisibleAndOpaque(clone);
 
-  // 2) agora sim esconde o original
   (viewer.context.items.ifcModels || []).forEach(m => { if (m.mesh) m.mesh.visible = false; });
 
-  // 3) posiciona e mostra
   placeInFrontOfCamera(viewer, 1.2);
   arRoot.visible = true;
 
-  // 4) loop simples
   const loop = ()=> {
     requestAnimationFrame(loop);
     renderer.render(scene, getCamera(viewer));
@@ -202,7 +475,6 @@ function endAR(viewer){
     renderer.xr.enabled = false;
   }
 
-  // limpa clones antigos e volta o original
   for (let i = arRoot.children.length - 1; i >= 0; i--) {
     const child = arRoot.children[i];
     if (child.userData?.fromIFC) arRoot.remove(child);
@@ -216,9 +488,10 @@ function endAR(viewer){
   document.body.classList.remove('is-ar');
   document.getElementById('ar-overlay')?.classList.add('hidden');
   document.getElementById('ar-button').style.display='inline-block';
+  document.getElementById('ar-exit-button').style.display='none';
 }
 
-/* ========= utils ========= */
+/* ========= utils (iguais) ========= */
 function forceVisibleAndOpaque(obj){
   if (!obj) return;
   obj.traverse(o=>{
@@ -265,7 +538,6 @@ function autoScaleFor(mesh, targetDiagMeters = 1.5){
   const box = new THREE.Box3().setFromObject(mesh);
   const s = box.getSize(new THREE.Vector3());
   let diag = Math.hypot(s.x, s.y, s.z) || 1;
-  // Se o modelo parece estar em milímetros, converte para "metros lógicos"
   const diagMeters = diag > 500 ? (diag / 1000) : diag;
   const scale = targetDiagMeters / diagMeters;
   return Math.max(0.005, Math.min(10, scale));
@@ -309,4 +581,22 @@ function placeModelAtReticle(viewer) {
   arRoot.visible = true;
 }
 
-init();
+// ===== Função auxiliar para buscar pavimentos =====
+async function getAllStoreys(viewer, modelID) {
+  const tree = await viewer.IFC.getSpatialStructure(modelID);
+  const storeys = [];
+  (function traverse(node) {
+    if (!node) return;
+    if ((node.type || '').toUpperCase() === 'IFCBUILDINGSTOREY') {
+      storeys.push(node);
+    }
+    node.children?.forEach(traverse);
+  })(tree);
+  return storeys;
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
