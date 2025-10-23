@@ -273,7 +273,7 @@ function placeInFrontOfCamera(distance = originParams.distance) {
   const cam = getCamera(viewer);
   const mesh = ensureARMesh();
   if (!mesh) return;
-
+  // ---Para desativar o Hit-test comente a linha abaixo.---
   if (!userTouchedScale) userScale = autoScaleFor(mesh, 1.5);
 
   const dir = new THREE.Vector3(0,0,-1).applyQuaternion(cam.quaternion);
@@ -283,7 +283,7 @@ function placeInFrontOfCamera(distance = originParams.distance) {
   arRoot.position.copy(pos);
   arRoot.quaternion.set(0,0,0,1);
   arRoot.rotateY(yaw);
-  arRoot.scale.set(userScale, userScale, userScale);
+  arRoot.scale.set(1, 1, 1);
   arRoot.visible = true;
   dragYaw = arRoot.rotation.y; // base para rotação por arraste (futuro)
 }
@@ -348,10 +348,15 @@ async function startAR(domOverlayRoot){
   catch { xrRefSpace = await xrSession.requestReferenceSpace('local'); }
 
   // Hit-test viewer-space (se suportado)
+  // ----Para desativar o Hit-test comente o trecho abaixo.----
   try {
     const viewerSpace = await xrSession.requestReferenceSpace('viewer');
     xrHitTestSource = await xrSession.requestHitTestSource({ space: viewerSpace });
   } catch { xrHitTestSource = null; }
+  
+
+  // ----Para desativar o Hit-test retire o comentario da linha abaixo.----
+  /*xrHitTestSource = null;*/ // força a não usar hit test
 
   // Fundo transparente + garantir grid OFF e eixos ON (também no AR)
   renderer.domElement.style.background = 'transparent';
@@ -430,17 +435,19 @@ async function startAR(domOverlayRoot){
   xrSession.addEventListener('end',    ()=> endAR());
 
   // Loop de renderização XR + hit-test
+  
   renderer.setAnimationLoop((time, frame)=>{
-    if (frame && xrHitTestSource) {
+    /*if (frame && xrHitTestSource) {
       const hits = frame.getHitTestResults(xrHitTestSource);
       if (hits.length){
         const pose = hits[0].getPose(xrRefSpace);
         if (pose){ reticle.visible=true; reticle.matrix.fromArray(pose.transform.matrix); }
       } else reticle.visible=false;
     }
+    */
     renderer.render(scene,camera);
   });
-
+  
   arRoot.visible = true;
   if (!xrHitTestSource) placeInFrontOfCamera(); // fallback de posicionamento SEM sair do WebXR
 
