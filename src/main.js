@@ -38,7 +38,7 @@ let dragYaw = 0;
 let gHasSelection = false;
 
 /** Parâmetros de origem/posição inicial — podem ser definidos externamente. */
-let originParams = { x: 0, y: 0, z: 0, distance: 1.2 };
+let originParams = { x: 0, y: 0, z: 0, distance: 1.2, rot: { yaw: 0, pitch: 0, roll: 0 }};
 
 // ==================================================================================
 /**
@@ -278,11 +278,28 @@ function placeInFrontOfCamera(distance = originParams.distance) {
 
   const dir = new THREE.Vector3(0,0,-1).applyQuaternion(cam.quaternion);
   const pos = new THREE.Vector3(originParams.x, originParams.y, originParams.z).add(dir.multiplyScalar(distance));
+  
+  /*
   const yaw = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ').y;
 
   arRoot.position.copy(pos);
   arRoot.quaternion.set(0,0,0,1);
   arRoot.rotateY(yaw);
+  */
+
+  const camEuler = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
+  const camYaw = camEuler.y;
+
+  const euler = new THREE.Euler(
+    THREE.MathUtils.degToRad(originParams.rot.pitch || 0),
+    camYaw + THREE.MathUtils.degToRad(originParams.rot.yaw || 0),
+    THREE.MathUtils.degToRad(originParams.rot.roll || 0),
+    'YXZ'
+  );
+
+  arRoot.position.copy(pos);
+  arRoot.quaternion.setFromEuler(euler);
+
   arRoot.scale.set(1, 1, 1);
   arRoot.visible = true;
   dragYaw = arRoot.rotation.y; // base para rotação por arraste (futuro)
@@ -356,7 +373,7 @@ async function startAR(domOverlayRoot){
   
 
   // ----Para desativar o Hit-test retire o comentario da linha abaixo.----
-  /*xrHitTestSource = null;*/ // força a não usar hit test
+  //xrHitTestSource = null; // força a não usar hit test
 
   // Fundo transparente + garantir grid OFF e eixos ON (também no AR)
   renderer.domElement.style.background = 'transparent';
@@ -437,14 +454,15 @@ async function startAR(domOverlayRoot){
   // Loop de renderização XR + hit-test
   
   renderer.setAnimationLoop((time, frame)=>{
-    /*if (frame && xrHitTestSource) {
+    // ----Para desativar o Hit-test comente o trecho abaixo. (IF)----
+    if (frame && xrHitTestSource) {
       const hits = frame.getHitTestResults(xrHitTestSource);
       if (hits.length){
         const pose = hits[0].getPose(xrRefSpace);
         if (pose){ reticle.visible=true; reticle.matrix.fromArray(pose.transform.matrix); }
       } else reticle.visible=false;
     }
-    */
+    
     renderer.render(scene,camera);
   });
   
